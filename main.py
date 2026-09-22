@@ -39,68 +39,45 @@ async def get_fresh_token():
 class URLPayload(BaseModel):
     url: str
 
-# 100% Working Multi-Gateway Terabox Resolver
+def extract_terabox_surl(url: str):
+    match = re.search(r'(?:/s/|surl=)([a-zA-Z0-9_-]+)', url)
+    if not match:
+        return None, None
+    raw = match.group(1)
+    surl_clean = raw[1:] if raw.startswith("1") else raw
+    return raw, surl_clean
+
+# Robust Multi-Gateway Terabox Resolver
 async def resolve_terabox(url: str):
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
-        "Accept": "application/json, text/plain, */*"
+        "Accept": "application/json"
     }
-    
-    # Extract shorturl key if present
-    surl_match = re.search(r'(?:/s/|surl=)([a-zA-Z0-9_-]+)', url)
-    clean_url = url
-    if surl_match:
-        surl_key = surl_match.group(1).replace("1", "", 1) if surl_match.group(1).startswith("1") else surl_match.group(1)
-    else:
-        surl_key = ""
 
-    # Endpoints list
-    endpoints = [
-        # Method 1: Terabox Web API Gateway
-        {
-            "url": "https://terabox.hnn.workers.dev/api/get-info",
-            "method": "GET",
-            "params": {"shorturl": surl_key} if surl_key else {"url": clean_url}
-        },
-        # Method 2: Fast Terabox Cloud API
-        {
-            "url": f"https://api.terabox.app/box/download?url={urllib.parse.quote(clean_url)}",
-            "method": "GET"
-        },
-        # Method 3: Third Party Gateway
-        {
-            "url": f"https://teraboxvideodownloader.nepcoderdevs.workers.dev/?url={urllib.parse.quote(clean_url)}",
-            "method": "GET"
-        },
-        # Method 4: Public YT/Terabox Resolver
-        {
-            "url": f"https://yt-video-production.up.railway.app/terabox?url={urllib.parse.quote(clean_url)}",
-            "method": "GET"
-        }
+    raw_surl, surl_clean = extract_terabox_surl(url)
+    if not surl_clean:
+        return None
+
+    api_endpoints = [
+        f"https://terabox-api.subhampreet.workers.dev/api?url={urllib.parse.quote(url)}",
+        f"https://terabox-dl.freedailycourse.com/api?url={urllib.parse.quote(url)}",
+        f"https://terabox-api-seven.vercel.app/api?url={urllib.parse.quote(url)}",
+        f"https://terabox.udayscripts.workers.dev/?url={urllib.parse.quote(url)}"
     ]
 
-    for ep in endpoints:
+    for api in api_endpoints:
         try:
-            if ep["method"] == "GET":
-                res = requests.get(ep["url"], params=ep.get("params"), headers=headers, timeout=12)
-            else:
-                res = requests.post(ep["url"], json=ep.get("json"), headers=headers, timeout=12)
-
-            if res.status_code == 200:
-                data = res.json()
-                
-                # Check for array response
+            r = requests.get(api, headers=headers, timeout=8)
+            if r.status_code == 200:
+                data = r.json()
                 if isinstance(data, list) and len(data) > 0:
                     data = data[0]
                 elif isinstance(data, dict):
-                    # Check nested structures
-                    for key in ["response", "list", "data", "download"]:
+                    for key in ["response", "list", "data"]:
                         if key in data and isinstance(data[key], list) and len(data[key]) > 0:
                             data = data[key][0]
                             break
-                        elif key in data and isinstance(data[key], dict):
-                            data = data[key]
-
+                
                 v_url = (
                     data.get("download_link") or 
                     data.get("fast_download_link") or 
@@ -108,14 +85,22 @@ async def resolve_terabox(url: str):
                     data.get("url") or 
                     data.get("direct_link")
                 )
-                
                 if v_url:
                     name = data.get("title") or data.get("file_name") or data.get("name") or "terabox_video.mp4"
-                    return {"success": True, "url": v_url, "name": name}
+                    return {"success": True, "type": "video", "url": v_url, "name": name}
         except Exception:
             continue
 
-    return None
+    # ফলব্যাক: ডিরেক্ট স্ট্রিম প্লেয়ার এবং এক্সটার্নাল ডাউনলোডার
+    embed_url = f"https://www.terabox.com/sharing/embed?surl={surl_clean}"
+    direct_downloader = f"https://teraboxdownloader.net/?url={urllib.parse.quote(url)}"
+    return {
+        "success": True,
+        "type": "embed",
+        "url": embed_url,
+        "name": f"Terabox_{surl_clean}.mp4",
+        "download_url": direct_downloader
+    }
 
 # Flezen Resolver
 async def resolve_flezen(url: str):
@@ -149,6 +134,7 @@ async def resolve_flezen(url: str):
                 file_info = s_data.get("file", {})
                 return {
                     "success": True,
+                    "type": "video",
                     "url": file_info.get("url"),
                     "name": file_info.get("name", "video.mp4")
                 }
@@ -167,16 +153,16 @@ async def fetch_video(payload: URLPayload):
         res = await resolve_flezen(link)
         if res:
             return res
-        raise HTTPException(status_code=400, detail="Flezen theke video link paoa jayni!")
+        raise HTTPException(status_code=400, detail="Flezen থেকে ভিডিও লিঙ্ক পাওয়া যায়নি!")
 
-    terabox_domains = ["terabox", "1024tera", "terashare", "freeterabox", "4funbox", "mirrobox"]
+    terabox_domains = ["terabox", "1024tera", "terashare", "freeterabox", "4funbox", "mirrobox", "tibibox"]
     if any(domain in link.lower() for domain in terabox_domains):
         res = await resolve_terabox(link)
         if res:
             return res
-        raise HTTPException(status_code=400, detail="Terabox server theke video link process kora jayni! Link-ti invalid ba expired.")
+        raise HTTPException(status_code=400, detail="Terabox লিঙ্কটি অবৈধ বা মেয়াদোত্তীর্ণ!")
 
-    raise HTTPException(status_code=400, detail="Unsupported URL! Sudhu Flezen ba Terabox link support kore.")
+    raise HTTPException(status_code=400, detail="শুধুমাত্র Flezen অথবা Terabox লিঙ্ক সাপোর্ট করে।")
 
 @app.get("/", response_class=HTMLResponse)
 def home():
@@ -189,7 +175,7 @@ def home():
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <style>
             body { font-family: system-ui, sans-serif; background: #0b0f19; color: #f8fafc; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; padding: 20px; box-sizing: border-box; }
-            .card { background: #1e293b; padding: 26px; border-radius: 16px; width: 100%; max-width: 520px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+            .card { background: #1e293b; padding: 26px; border-radius: 16px; width: 100%; max-width: 540px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
             h2 { color: #38bdf8; text-align: center; margin-top: 0; }
             p.sub { text-align: center; color: #94a3b8; font-size: 13px; margin-top: -8px; margin-bottom: 15px; }
             .input-group { display: flex; gap: 8px; margin: 15px 0 10px 0; }
@@ -201,6 +187,7 @@ def home():
             .btn-run:disabled, .btn-paste:disabled { opacity: 0.5; cursor: not-allowed; }
             #videoContainer { margin-top: 20px; display: none; }
             video { width: 100%; border-radius: 8px; background: #000; margin-bottom: 12px; }
+            iframe { width: 100%; height: 315px; border-radius: 8px; border: none; background: #000; margin-bottom: 12px; }
             .btn-dl { display: block; text-align: center; background: #10b981; color: white; padding: 12px; border-radius: 8px; text-decoration: none; font-weight: bold; }
             .btn-dl:hover { background: #059669; }
             #msg { text-align: center; color: #38bdf8; min-height: 20px; font-size: 14px; margin-top: 10px; }
@@ -211,26 +198,33 @@ def home():
             <h2>Direct Video Player</h2>
             <p class="sub">Flezen & Terabox Ad-Free Downloader</p>
             <div class="input-group">
-                <input type="text" id="linkInput" placeholder="Flezen ba Terabox link paste korun...">
+                <input type="text" id="linkInput" placeholder="Flezen বা Terabox লিঙ্ক পেস্ট করুন...">
                 <button type="button" class="btn-paste" id="pasteBtn" onclick="handlePasteAndRun()">Paste</button>
             </div>
             <button type="button" class="btn-run" id="btn" onclick="getVideo()">Video Anun</button>
             <div id="msg"></div>
             <div id="videoContainer">
-                <video id="player" controls playsinline></video>
-                <a id="dlBtn" class="btn-dl" href="#" target="_blank">Direct Download MP4</a>
+                <video id="player" controls playsinline style="display:none;"></video>
+                <iframe id="iframePlayer" allowfullscreen style="display:none;"></iframe>
+                <a id="dlBtn" class="btn-dl" href="#" target="_blank">Direct Download</a>
             </div>
         </div>
 
         <script>
             function stopPreviousVideo() {
                 const player = document.getElementById("player");
+                const iframe = document.getElementById("iframePlayer");
                 const cont = document.getElementById("videoContainer");
                 try {
                     player.pause();
                     player.removeAttribute("src");
                     player.load();
                 } catch(e){}
+                try {
+                    iframe.src = "";
+                } catch(e){}
+                player.style.display = "none";
+                iframe.style.display = "none";
                 cont.style.display = "none";
             }
 
@@ -249,10 +243,10 @@ def home():
                         input.value = text.trim();
                         getVideo();
                     } else {
-                        alert("Clipboard khali!");
+                        alert("Clipboard খালি!");
                     }
                 } catch(err) {
-                    alert("Clipboard access permission proyojon!");
+                    alert("Clipboard ব্যবহারের অনুমতি দিন!");
                 }
             }
 
@@ -263,12 +257,13 @@ def home():
                 const msg = document.getElementById("msg");
                 const cont = document.getElementById("videoContainer");
                 const player = document.getElementById("player");
+                const iframe = document.getElementById("iframePlayer");
                 const dl = document.getElementById("dlBtn");
 
                 const url = input.value.trim();
                 if(!url) {
                     stopPreviousVideo();
-                    msg.innerText = "Doya kore link paste korun!";
+                    msg.innerText = "দয়া করে লিঙ্ক দিন!";
                     return;
                 }
 
@@ -277,7 +272,7 @@ def home():
                 btn.disabled = true;
                 pasteBtn.disabled = true;
                 msg.style.color = "#38bdf8";
-                msg.innerText = "Processing video... Opekkha korun.";
+                msg.innerText = "ভিডিও বিশ্লেষণ করা হচ্ছে...";
 
                 try {
                     const res = await fetch("/api/fetch", {
@@ -288,18 +283,29 @@ def home():
                     const d = await res.json();
                     if(res.ok && d.success) {
                         msg.innerText = "";
-                        player.src = d.url;
-                        player.load();
-                        dl.href = d.url;
-                        dl.setAttribute("download", d.name || "video.mp4");
+                        if(d.type === "embed") {
+                            player.style.display = "none";
+                            iframe.src = d.url;
+                            iframe.style.display = "block";
+                            dl.href = d.download_url || d.url;
+                            dl.innerText = "🚀 ফাস্ট ডাউনলোডারে ফাইলটি খুলুন";
+                        } else {
+                            iframe.style.display = "none";
+                            player.src = d.url;
+                            player.load();
+                            player.style.display = "block";
+                            dl.href = d.url;
+                            dl.innerText = "Direct Download MP4";
+                            dl.setAttribute("download", d.name || "video.mp4");
+                        }
                         cont.style.display = "block";
                     } else {
                         msg.style.color = "#f87171";
-                        msg.innerText = d.detail || "Video link paoa jayni!";
+                        msg.innerText = d.detail || "ভিডিও পাওয়া যায়নি!";
                     }
                 } catch(e) {
                     msg.style.color = "#f87171";
-                    msg.innerText = "Connection error ba timeout!";
+                    msg.innerText = "কানেকশন এরর হয়েছে!";
                 } finally {
                     btn.disabled = false;
                     pasteBtn.disabled = false;
