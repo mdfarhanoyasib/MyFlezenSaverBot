@@ -1,6 +1,5 @@
 import os
 import re
-import secrets
 import urllib.parse
 import asyncio
 import requests
@@ -40,109 +39,111 @@ async def get_fresh_token():
 class URLPayload(BaseModel):
     url: str
 
-def extract_terabox_surl(url: str):
+def extract_terabox_keys(url: str):
     match = re.search(r'(?:/s/|surl=)([a-zA-Z0-9_-]+)', url)
     if not match:
-        return None
+        return None, None
     raw = match.group(1)
-    return raw[1:] if raw.startswith("1") else raw
+    clean = raw[1:] if raw.startswith("1") else raw
+    return raw, clean
 
-# Iteraplay Engine Powered Terabox Resolver
+# Multi-Worker Ultra Stable Terabox Resolver
 async def resolve_terabox(url: str):
     clean_url = url.strip()
-    
-    # মেথড ১: iteraplay.com API (আনলিমিটেড সেশন রোটেশন সহ)
-    try:
-        rand_session = secrets.token_hex(16)
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
-            "Referer": "https://iteraplay.com/",
-            "Origin": "https://iteraplay.com",
-            "Content-Type": "application/json",
-            "Accept": "*/*",
-            "Cookie": f"session_id={rand_session};"
-        }
-        res = requests.post("https://iteraplay.com/api/stream", json={"url": clean_url}, headers=headers, timeout=12)
-        if res.status_code == 200:
-            data = res.json()
-            if data.get("status") == "success" and "list" in data:
-                for item in data["list"]:
-                    if item.get("type") == "video" and "fast_stream_url" in item:
-                        f_streams = item["fast_stream_url"]
-                        stream_url = (
-                            f_streams.get("1080p") or 
-                            f_streams.get("720p") or 
-                            f_streams.get("480p") or 
-                            f_streams.get("360p") or 
-                            (list(f_streams.values())[0] if f_streams else None)
-                        )
-                        if stream_url:
-                            return {
-                                "success": True,
-                                "url": stream_url,
-                                "download_url": stream_url,
-                                "name": item.get("name", "terabox_video.mp4")
-                            }
-    except Exception:
-        pass
+    raw_surl, clean_surl = extract_terabox_keys(clean_url)
 
-    # মেথড ২: সরাসরি অফিশিয়াল শর্ট-ইউআরএল ইনফো গেটওয়ে
-    surl = extract_terabox_surl(clean_url)
-    if surl:
-        try:
-            api_url = f"https://www.terabox.app/api/shorturlinfo?app_id=250528&shorturl={surl}&root=1"
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
-                "Referer": "https://www.terabox.app/"
-            }
-            r = requests.get(api_url, headers=headers, timeout=10)
-            if r.status_code == 200:
-                d = r.json()
-                if d.get("errno") == 0 and "list" in d and len(d["list"]) > 0:
-                    file_data = d["list"][0]
-                    fs_id = file_data.get("fs_id")
-                    name = file_data.get("server_filename", "terabox_video.mp4")
-                    dlink = file_data.get("dlink")
-                    stream_url = f"https://www.terabox.app/share/streaming?app_id=250528&shorturl={surl}&fs_id={fs_id}&type=M3U8_AUTO_720"
-                    return {
-                        "success": True,
-                        "url": stream_url,
-                        "download_url": dlink or stream_url,
-                        "name": name
-                    }
-        except Exception:
-            pass
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "Referer": "https://www.terabox.com/"
+    }
 
-    # মেথড ৩: ব্যাকআপ ওয়ার্কার্স গেটওয়ে
-    fallback_endpoints = [
-        f"https://teraboxvideodownloader.nepcoderdevs.workers.dev/?url={urllib.parse.quote(clean_url)}",
-        f"https://yt-video-production.up.railway.app/terabox?url={urllib.parse.quote(clean_url)}"
+    def find_video_url(data):
+        if not data:
+            return None, None
+        
+        if isinstance(data, list) and len(data) > 0:
+            for item in data:
+                u, n = find_video_url(item)
+                if u:
+                    return u, n
+            return None, None
+
+        if isinstance(data, dict):
+            for k in ["list", "data", "response", "files", "download"]:
+                if k in data and isinstance(data[k], (list, dict)):
+                    u, n = find_video_url(data[k])
+                    if u:
+                        return u, n
+
+            if "fast_stream_url" in data and isinstance(data["fast_stream_url"], dict):
+                f_streams = data["fast_stream_url"]
+                stream = (
+                    f_streams.get("720p") or 
+                    f_streams.get("1080p") or 
+                    f_streams.get("480p") or 
+                    f_streams.get("360p") or 
+                    (list(f_streams.values())[0] if f_streams else None)
+                )
+                if stream:
+                    name = data.get("name") or data.get("title") or "terabox_video.mp4"
+                    return stream, name
+
+            keys = ["download_link", "fast_download_link", "dlink", "url", "direct_link", "stream_url", "link"]
+            for k in keys:
+                val = data.get(k)
+                if val and isinstance(val, str) and val.startswith("http"):
+                    name = data.get("name") or data.get("server_filename") or data.get("title") or data.get("file_name") or "terabox_video.mp4"
+                    return val, name
+
+        return None, None
+
+    targets = [
+        {"url": f"https://terabox.hnn.workers.dev/api/get-info?shorturl={clean_surl}" if clean_surl else None, "method": "GET"},
+        {"url": f"https://terabox.hnn.workers.dev/api/get-info?shorturl={raw_surl}" if raw_surl else None, "method": "GET"},
+        {"url": "https://iteraplay.tera-api65.workers.dev/api/stream", "method": "POST", "json": {"url": clean_url}},
+        {"url": "https://iteraplay.tera-api65.workers.dev/stream", "method": "POST", "json": {"url": clean_url}},
+        {"url": f"https://terabox.udayscripts.workers.dev/?url={urllib.parse.quote(clean_url)}", "method": "GET"},
+        {"url": f"https://terabox-api.subhampreet.workers.dev/api?url={urllib.parse.quote(clean_url)}", "method": "GET"},
+        {"url": f"https://terabox-dl.freedailycourse.com/api?url={urllib.parse.quote(clean_url)}", "method": "GET"},
+        {"url": f"https://tb-api.dark-yasiya.workers.dev/?url={urllib.parse.quote(clean_url)}", "method": "GET"},
+        {"url": f"https://teraboxvideodownloader.nepcoderdevs.workers.dev/?url={urllib.parse.quote(clean_url)}", "method": "GET"},
+        {"url": f"https://terabox-api-seven.vercel.app/api?url={urllib.parse.quote(clean_url)}", "method": "GET"},
+        {"url": f"https://yt-video-production.up.railway.app/terabox?url={urllib.parse.quote(clean_url)}", "method": "GET"}
     ]
-    for fb_api in fallback_endpoints:
+
+    for target in targets:
+        t_url = target.get("url")
+        if not t_url:
+            continue
         try:
-            fb_res = requests.get(fb_api, timeout=10)
-            if fb_res.status_code == 200:
-                fb_data = fb_res.json()
-                if isinstance(fb_data, list) and len(fb_data) > 0:
-                    fb_data = fb_data[0]
-                elif isinstance(fb_data, dict):
-                    for k in ["response", "list", "data"]:
-                        if k in fb_data and isinstance(fb_data[k], list) and len(fb_data[k]) > 0:
-                            fb_data = fb_data[k][0]
-                            break
-                v_url = fb_data.get("download_link") or fb_data.get("fast_download_link") or fb_data.get("dlink") or fb_data.get("url")
+            if target["method"] == "GET":
+                r = requests.get(t_url, headers=headers, timeout=8)
+            else:
+                r = requests.post(t_url, json=target.get("json"), headers=headers, timeout=8)
+
+            if r.status_code == 200:
+                v_url, v_name = find_video_url(r.json())
                 if v_url:
-                    name = fb_data.get("title") or fb_data.get("file_name") or fb_data.get("name") or "terabox_video.mp4"
                     return {
                         "success": True,
+                        "type": "video",
                         "url": v_url,
                         "download_url": v_url,
-                        "name": name
+                        "name": v_name
                     }
         except Exception:
             continue
 
-    return None
+    # ফলব্যাক: ডিরেক্ট ওয়েব প্লেয়ার ভিউ
+    return {
+        "success": True,
+        "type": "fallback",
+        "url": "",
+        "download_url": f"https://teraboxdownloader.net/?url={urllib.parse.quote(clean_url)}",
+        "open_url": f"https://iteraplay.com",
+        "name": "terabox_video.mp4"
+    }
 
 # Flezen Resolver
 async def resolve_flezen(url: str):
@@ -176,6 +177,7 @@ async def resolve_flezen(url: str):
                 file_info = s_data.get("file", {})
                 return {
                     "success": True,
+                    "type": "video",
                     "url": file_info.get("url"),
                     "download_url": file_info.get("url"),
                     "name": file_info.get("name", "video.mp4")
@@ -202,9 +204,9 @@ async def fetch_video(payload: URLPayload):
         res = await resolve_terabox(link)
         if res:
             return res
-        raise HTTPException(status_code=400, detail="Terabox ভিডিও প্রসেস করা সম্ভব হয়নি বা লিঙ্কটির মেয়াদ শেষ!")
+        raise HTTPException(status_code=400, detail="ভিডিও লিঙ্কটি প্রসেস করা সম্ভব হয়নি!")
 
-    raise HTTPException(status_code=400, detail="শুধুমাত্র Flezen অথবা Terabox লিঙ্ক সাপোর্ট করে।")
+    raise HTTPException(status_code=400, detail="শুধুমাত্র Flezen অথবা Terabox লিঙ্ক দিন।")
 
 @app.get("/", response_class=HTMLResponse)
 def home():
@@ -230,8 +232,10 @@ def home():
             .btn-run:disabled, .btn-paste:disabled { opacity: 0.5; cursor: not-allowed; }
             #videoContainer { margin-top: 20px; display: none; }
             video { width: 100%; border-radius: 8px; background: #000; margin-bottom: 12px; }
-            .btn-dl { display: block; text-align: center; background: #10b981; color: white; padding: 12px; border-radius: 8px; text-decoration: none; font-weight: bold; }
+            .btn-dl { display: block; text-align: center; background: #10b981; color: white; padding: 12px; border-radius: 8px; text-decoration: none; font-weight: bold; margin-bottom: 8px; }
             .btn-dl:hover { background: #059669; }
+            .btn-fb { display: block; text-align: center; background: #6366f1; color: white; padding: 12px; border-radius: 8px; text-decoration: none; font-weight: bold; }
+            .btn-fb:hover { background: #4f46e5; }
             #msg { text-align: center; color: #38bdf8; min-height: 20px; font-size: 14px; margin-top: 10px; }
         </style>
     </head>
@@ -248,6 +252,7 @@ def home():
             <div id="videoContainer">
                 <video id="player" controls playsinline></video>
                 <a id="dlBtn" class="btn-dl" href="#" target="_blank">Direct Download</a>
+                <a id="fbBtn" class="btn-fb" href="#" target="_blank" style="display:none;">Iteraplay-তে সরাসরি ভিডিও দেখুন</a>
             </div>
         </div>
 
@@ -267,6 +272,7 @@ def home():
                     player.load();
                 } catch(e){}
                 cont.style.display = "none";
+                document.getElementById("fbBtn").style.display = "none";
             }
 
             document.getElementById("linkInput").addEventListener("input", function() {
@@ -287,7 +293,7 @@ def home():
                         alert("Clipboard খালি!");
                     }
                 } catch(err) {
-                    alert("Clipboard এক্সেস পারমিশন দিন!");
+                    alert("Clipboard এক্সেস দিন!");
                 }
             }
 
@@ -299,6 +305,7 @@ def home():
                 const cont = document.getElementById("videoContainer");
                 const player = document.getElementById("player");
                 const dl = document.getElementById("dlBtn");
+                const fb = document.getElementById("fbBtn");
 
                 const url = input.value.trim();
                 if(!url) {
@@ -312,7 +319,7 @@ def home():
                 btn.disabled = true;
                 pasteBtn.disabled = true;
                 msg.style.color = "#38bdf8";
-                msg.innerText = "ভিডিও স্ট্রিম লোড হচ্ছে...";
+                msg.innerText = "ভিডিও স্ট্রিম খোঁজা হচ্ছে...";
 
                 try {
                     const res = await fetch("/api/fetch", {
@@ -323,14 +330,23 @@ def home():
                     const d = await res.json();
                     if(res.ok && d.success) {
                         msg.innerText = "";
+                        
+                        if (d.type === "fallback") {
+                            player.style.display = "none";
+                            dl.href = d.download_url;
+                            dl.innerText = "🚀 ফাস্ট ডাউনলোডার থেকে নামান";
+                            fb.href = d.open_url;
+                            fb.style.display = "block";
+                            cont.style.display = "block";
+                            return;
+                        }
+
+                        player.style.display = "block";
                         const videoSrc = d.url;
 
                         if (videoSrc.includes(".m3u8") || videoSrc.includes("fast_stream") || videoSrc.includes("streaming")) {
                             if (Hls.isSupported()) {
-                                hlsInstance = new Hls({
-                                    enableWorker: true,
-                                    lowLatencyMode: true
-                                });
+                                hlsInstance = new Hls({ enableWorker: true, lowLatencyMode: true });
                                 hlsInstance.loadSource(videoSrc);
                                 hlsInstance.attachMedia(player);
                                 hlsInstance.on(Hls.Events.MANIFEST_PARSED, function () {
@@ -346,6 +362,7 @@ def home():
                             player.play().catch(()=>{});
                         }
 
+                        dl.innerText = "Direct Download MP4";
                         dl.href = d.download_url || videoSrc;
                         dl.setAttribute("download", d.name || "video.mp4");
                         cont.style.display = "block";
