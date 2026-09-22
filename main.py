@@ -42,34 +42,53 @@ class URLPayload(BaseModel):
 def extract_terabox_surl(url: str):
     match = re.search(r'(?:/s/|surl=)([a-zA-Z0-9_-]+)', url)
     if not match:
-        return None, None
+        return None
     raw = match.group(1)
-    surl_clean = raw[1:] if raw.startswith("1") else raw
-    return raw, surl_clean
+    return raw[1:] if raw.startswith("1") else raw
 
-# Robust Multi-Gateway Terabox Resolver
+# সরাসরি Terabox Streaming & Direct Link Resolver
 async def resolve_terabox(url: str):
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
-        "Accept": "application/json"
-    }
-
-    raw_surl, surl_clean = extract_terabox_surl(url)
-    if not surl_clean:
+    surl = extract_terabox_surl(url)
+    if not surl:
         return None
 
-    api_endpoints = [
-        f"https://terabox-api.subhampreet.workers.dev/api?url={urllib.parse.quote(url)}",
-        f"https://terabox-dl.freedailycourse.com/api?url={urllib.parse.quote(url)}",
-        f"https://terabox-api-seven.vercel.app/api?url={urllib.parse.quote(url)}",
-        f"https://terabox.udayscripts.workers.dev/?url={urllib.parse.quote(url)}"
+    # ধাপ ১: Terabox Web Engine API
+    try:
+        api_url = f"https://www.terabox.app/api/shorturlinfo?app_id=250528&shorturl={surl}&root=1"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+            "Referer": "https://www.terabox.app/"
+        }
+        r = requests.get(api_url, headers=headers, timeout=10)
+        if r.status_code == 200:
+            d = r.json()
+            if d.get("errno") == 0 and "list" in d and len(d["list"]) > 0:
+                file_data = d["list"][0]
+                fs_id = file_data.get("fs_id")
+                name = file_data.get("server_filename", "terabox_video.mp4")
+                dlink = file_data.get("dlink")
+                stream_url = f"https://www.terabox.app/share/streaming?app_id=250528&shorturl={surl}&fs_id={fs_id}&type=M3U8_AUTO_720"
+                return {
+                    "success": True,
+                    "url": stream_url,
+                    "download_url": dlink or stream_url,
+                    "name": name
+                }
+    except Exception:
+        pass
+
+    # ধাপ ২: পাবলিক এপিআই গেটওয়ে ফলব্যাক
+    api_list = [
+        f"https://teraboxvideodownloader.nepcoderdevs.workers.dev/?url={urllib.parse.quote(url)}",
+        f"https://yt-video-production.up.railway.app/terabox?url={urllib.parse.quote(url)}",
+        f"https://terabox-api.subhampreet.workers.dev/api?url={urllib.parse.quote(url)}"
     ]
 
-    for api in api_endpoints:
+    for api in api_list:
         try:
-            r = requests.get(api, headers=headers, timeout=8)
-            if r.status_code == 200:
-                data = r.json()
+            res = requests.get(api, timeout=10)
+            if res.status_code == 200:
+                data = res.json()
                 if isinstance(data, list) and len(data) > 0:
                     data = data[0]
                 elif isinstance(data, dict):
@@ -77,7 +96,7 @@ async def resolve_terabox(url: str):
                         if key in data and isinstance(data[key], list) and len(data[key]) > 0:
                             data = data[key][0]
                             break
-                
+
                 v_url = (
                     data.get("download_link") or 
                     data.get("fast_download_link") or 
@@ -87,20 +106,16 @@ async def resolve_terabox(url: str):
                 )
                 if v_url:
                     name = data.get("title") or data.get("file_name") or data.get("name") or "terabox_video.mp4"
-                    return {"success": True, "type": "video", "url": v_url, "name": name}
+                    return {
+                        "success": True,
+                        "url": v_url,
+                        "download_url": v_url,
+                        "name": name
+                    }
         except Exception:
             continue
 
-    # ফলব্যাক: ডিরেক্ট স্ট্রিম প্লেয়ার এবং এক্সটার্নাল ডাউনলোডার
-    embed_url = f"https://www.terabox.com/sharing/embed?surl={surl_clean}"
-    direct_downloader = f"https://teraboxdownloader.net/?url={urllib.parse.quote(url)}"
-    return {
-        "success": True,
-        "type": "embed",
-        "url": embed_url,
-        "name": f"Terabox_{surl_clean}.mp4",
-        "download_url": direct_downloader
-    }
+    return None
 
 # Flezen Resolver
 async def resolve_flezen(url: str):
@@ -134,8 +149,8 @@ async def resolve_flezen(url: str):
                 file_info = s_data.get("file", {})
                 return {
                     "success": True,
-                    "type": "video",
                     "url": file_info.get("url"),
+                    "download_url": file_info.get("url"),
                     "name": file_info.get("name", "video.mp4")
                 }
             elif not s_data.get("ok") or s_data.get("status") == "error":
@@ -153,14 +168,14 @@ async def fetch_video(payload: URLPayload):
         res = await resolve_flezen(link)
         if res:
             return res
-        raise HTTPException(status_code=400, detail="Flezen থেকে ভিডিও লিঙ্ক পাওয়া যায়নি!")
+        raise HTTPException(status_code=400, detail="Flezen থেকে ভিডিও লিঙ্ক আনা সম্ভব হয়নি!")
 
     terabox_domains = ["terabox", "1024tera", "terashare", "freeterabox", "4funbox", "mirrobox", "tibibox"]
     if any(domain in link.lower() for domain in terabox_domains):
         res = await resolve_terabox(link)
         if res:
             return res
-        raise HTTPException(status_code=400, detail="Terabox লিঙ্কটি অবৈধ বা মেয়াদোত্তীর্ণ!")
+        raise HTTPException(status_code=400, detail="Terabox লিঙ্কটি এক্সপায়ার্ড বা ভিডিওটি ডিলিট করা হয়েছে!")
 
     raise HTTPException(status_code=400, detail="শুধুমাত্র Flezen অথবা Terabox লিঙ্ক সাপোর্ট করে।")
 
@@ -171,8 +186,10 @@ def home():
     <html lang="bn">
     <head>
         <meta charset="UTF-8">
-        <title>Flezen & Terabox Downloader</title>
+        <title>Flezen & Terabox Player</title>
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <!-- Hls.js লাইব্রেরি দিয়ে সরাসরি m3u8 ও mp4 প্লে করা হবে -->
+        <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
         <style>
             body { font-family: system-ui, sans-serif; background: #0b0f19; color: #f8fafc; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; padding: 20px; box-sizing: border-box; }
             .card { background: #1e293b; padding: 26px; border-radius: 16px; width: 100%; max-width: 540px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
@@ -187,7 +204,6 @@ def home():
             .btn-run:disabled, .btn-paste:disabled { opacity: 0.5; cursor: not-allowed; }
             #videoContainer { margin-top: 20px; display: none; }
             video { width: 100%; border-radius: 8px; background: #000; margin-bottom: 12px; }
-            iframe { width: 100%; height: 315px; border-radius: 8px; border: none; background: #000; margin-bottom: 12px; }
             .btn-dl { display: block; text-align: center; background: #10b981; color: white; padding: 12px; border-radius: 8px; text-decoration: none; font-weight: bold; }
             .btn-dl:hover { background: #059669; }
             #msg { text-align: center; color: #38bdf8; min-height: 20px; font-size: 14px; margin-top: 10px; }
@@ -204,27 +220,26 @@ def home():
             <button type="button" class="btn-run" id="btn" onclick="getVideo()">Video Anun</button>
             <div id="msg"></div>
             <div id="videoContainer">
-                <video id="player" controls playsinline style="display:none;"></video>
-                <iframe id="iframePlayer" allowfullscreen style="display:none;"></iframe>
+                <video id="player" controls playsinline></video>
                 <a id="dlBtn" class="btn-dl" href="#" target="_blank">Direct Download</a>
             </div>
         </div>
 
         <script>
+            let hlsInstance = null;
+
             function stopPreviousVideo() {
                 const player = document.getElementById("player");
-                const iframe = document.getElementById("iframePlayer");
                 const cont = document.getElementById("videoContainer");
+                if (hlsInstance) {
+                    hlsInstance.destroy();
+                    hlsInstance = null;
+                }
                 try {
                     player.pause();
                     player.removeAttribute("src");
                     player.load();
                 } catch(e){}
-                try {
-                    iframe.src = "";
-                } catch(e){}
-                player.style.display = "none";
-                iframe.style.display = "none";
                 cont.style.display = "none";
             }
 
@@ -246,7 +261,7 @@ def home():
                         alert("Clipboard খালি!");
                     }
                 } catch(err) {
-                    alert("Clipboard ব্যবহারের অনুমতি দিন!");
+                    alert("Clipboard এক্সেস পারমিশন দিন!");
                 }
             }
 
@@ -257,13 +272,12 @@ def home():
                 const msg = document.getElementById("msg");
                 const cont = document.getElementById("videoContainer");
                 const player = document.getElementById("player");
-                const iframe = document.getElementById("iframePlayer");
                 const dl = document.getElementById("dlBtn");
 
                 const url = input.value.trim();
                 if(!url) {
                     stopPreviousVideo();
-                    msg.innerText = "দয়া করে লিঙ্ক দিন!";
+                    msg.innerText = "দয়া করে একটি লিঙ্ক দিন!";
                     return;
                 }
 
@@ -272,7 +286,7 @@ def home():
                 btn.disabled = true;
                 pasteBtn.disabled = true;
                 msg.style.color = "#38bdf8";
-                msg.innerText = "ভিডিও বিশ্লেষণ করা হচ্ছে...";
+                msg.innerText = "ভিডিও স্ট্রিম প্রস্তুত করা হচ্ছে...";
 
                 try {
                     const res = await fetch("/api/fetch", {
@@ -283,21 +297,30 @@ def home():
                     const d = await res.json();
                     if(res.ok && d.success) {
                         msg.innerText = "";
-                        if(d.type === "embed") {
-                            player.style.display = "none";
-                            iframe.src = d.url;
-                            iframe.style.display = "block";
-                            dl.href = d.download_url || d.url;
-                            dl.innerText = "🚀 ফাস্ট ডাউনলোডারে ফাইলটি খুলুন";
+                        const videoSrc = d.url;
+
+                        // HLS Stream (.m3u8) হ্যান্ডলিং
+                        if (videoSrc.includes(".m3u8") || videoSrc.includes("streaming")) {
+                            if (Hls.isSupported()) {
+                                hlsInstance = new Hls();
+                                hlsInstance.loadSource(videoSrc);
+                                hlsInstance.attachMedia(player);
+                                hlsInstance.on(Hls.Events.MANIFEST_PARSED, function () {
+                                    player.play().catch(()=>{});
+                                });
+                            } else if (player.canPlayType('application/vnd.apple.mpegurl')) {
+                                player.src = videoSrc;
+                                player.play().catch(()=>{});
+                            }
                         } else {
-                            iframe.style.display = "none";
-                            player.src = d.url;
+                            // রেগুলার MP4 ভিডিও
+                            player.src = videoSrc;
                             player.load();
-                            player.style.display = "block";
-                            dl.href = d.url;
-                            dl.innerText = "Direct Download MP4";
-                            dl.setAttribute("download", d.name || "video.mp4");
+                            player.play().catch(()=>{});
                         }
+
+                        dl.href = d.download_url || videoSrc;
+                        dl.setAttribute("download", d.name || "video.mp4");
                         cont.style.display = "block";
                     } else {
                         msg.style.color = "#f87171";
