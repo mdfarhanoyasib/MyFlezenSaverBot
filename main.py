@@ -38,30 +38,44 @@ async def get_fresh_token():
 class URLPayload(BaseModel):
     url: str
 
-# Terabox Resolver
+# Multi-API Stable Terabox Resolver
 async def resolve_terabox(url: str):
-    try:
-        api_endpoint = f"https://terabox-api.frontbench.fun/api/yt?url={urllib.parse.quote(url)}"
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-        }
-        res = requests.get(api_endpoint, headers=headers, timeout=20)
-        data = res.json()
-        
-        # Public API response format parsing
-        if isinstance(data, list) and len(data) > 0:
-            first_item = data[0]
-            video_url = first_item.get("url") or first_item.get("download_link") or first_item.get("fast_download_link")
-            name = first_item.get("title") or first_item.get("name") or "terabox_video.mp4"
-            if video_url:
-                return {"success": True, "url": video_url, "name": name}
-        elif isinstance(data, dict):
-            video_url = data.get("url") or data.get("download_link") or data.get("fast_download_link")
-            name = data.get("title") or data.get("name") or "terabox_video.mp4"
-            if video_url:
-                return {"success": True, "url": video_url, "name": name}
-    except Exception as e:
-        print(f"[!] Terabox error: {e}")
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+        "Accept": "application/json"
+    }
+    
+    api_list = [
+        f"https://yt-video-production.up.railway.app/terabox?url={urllib.parse.quote(url)}",
+        f"https://teraboxvideodownloader.nepcoderdevs.workers.dev/?url={urllib.parse.quote(url)}",
+        f"https://terabox-api.frontbench.fun/api/yt?url={urllib.parse.quote(url)}"
+    ]
+
+    for api_url in api_list:
+        try:
+            res = requests.get(api_url, headers=headers, timeout=12)
+            if res.status_code == 200:
+                data = res.json()
+                
+                if isinstance(data, dict):
+                    items = data.get("response") or data.get("list") or data.get("data")
+                    if isinstance(items, list) and len(items) > 0:
+                        data = items[0]
+
+                    v_url = data.get("download_link") or data.get("fast_download_link") or data.get("url") or data.get("direct_link")
+                    name = data.get("title") or data.get("file_name") or data.get("name") or "terabox_video.mp4"
+                    if v_url:
+                        return {"success": True, "url": v_url, "name": name}
+
+                elif isinstance(data, list) and len(data) > 0:
+                    first = data[0]
+                    v_url = first.get("download_link") or first.get("fast_download_link") or first.get("url")
+                    name = first.get("title") or first.get("name") or "terabox_video.mp4"
+                    if v_url:
+                        return {"success": True, "url": v_url, "name": name}
+        except Exception:
+            continue
+
     return None
 
 # Flezen Resolver
@@ -110,14 +124,12 @@ async def resolve_flezen(url: str):
 async def fetch_video(payload: URLPayload):
     link = payload.url.strip()
     
-    # 1. Check if it is a Flezen link
     if "flezen.com/s/" in link:
         res = await resolve_flezen(link)
         if res:
             return res
         raise HTTPException(status_code=400, detail="Flezen theke video link paoa jayni!")
 
-    # 2. Check if it is a Terabox link
     terabox_domains = ["terabox.com", "1024tera.com", "teraboxapp.com", "terasharelink.com", "freeterabox.com"]
     if any(domain in link for domain in terabox_domains):
         res = await resolve_terabox(link)
