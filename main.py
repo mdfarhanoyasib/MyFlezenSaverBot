@@ -38,12 +38,34 @@ async def get_fresh_token():
 class URLPayload(BaseModel):
     url: str
 
-@app.post("/api/fetch")
-async def fetch_video(payload: URLPayload):
-    link = payload.url.strip()
-    if not link.startswith("https://flezen.com/s/"):
-        raise HTTPException(status_code=400, detail="Invalid Flezen link!")
+# Terabox Resolver
+async def resolve_terabox(url: str):
+    try:
+        api_endpoint = f"https://terabox-api.frontbench.fun/api/yt?url={urllib.parse.quote(url)}"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        }
+        res = requests.get(api_endpoint, headers=headers, timeout=20)
+        data = res.json()
+        
+        # Public API response format parsing
+        if isinstance(data, list) and len(data) > 0:
+            first_item = data[0]
+            video_url = first_item.get("url") or first_item.get("download_link") or first_item.get("fast_download_link")
+            name = first_item.get("title") or first_item.get("name") or "terabox_video.mp4"
+            if video_url:
+                return {"success": True, "url": video_url, "name": name}
+        elif isinstance(data, dict):
+            video_url = data.get("url") or data.get("download_link") or data.get("fast_download_link")
+            name = data.get("title") or data.get("name") or "terabox_video.mp4"
+            if video_url:
+                return {"success": True, "url": video_url, "name": name}
+    except Exception as e:
+        print(f"[!] Terabox error: {e}")
+    return None
 
+# Flezen Resolver
+async def resolve_flezen(url: str):
     try:
         token = await get_fresh_token()
     except Exception as e:
@@ -60,7 +82,7 @@ async def fetch_video(payload: URLPayload):
     }
 
     try:
-        requests.post(DOWNLOAD_ENDPOINT, json={"link": link}, headers=headers, timeout=15)
+        requests.post(DOWNLOAD_ENDPOINT, json={"link": url}, headers=headers, timeout=15)
     except Exception:
         pass
 
@@ -68,7 +90,7 @@ async def fetch_video(payload: URLPayload):
     start_time = loop.time()
     while loop.time() - start_time < 45:
         try:
-            s_res = requests.get(STATUS_ENDPOINT, params={"link": link}, headers=headers, timeout=15)
+            s_res = requests.get(STATUS_ENDPOINT, params={"link": url}, headers=headers, timeout=15)
             s_data = s_res.json()
             if s_data.get("ok") and s_data.get("status") == "done":
                 file_info = s_data.get("file", {})
@@ -78,12 +100,32 @@ async def fetch_video(payload: URLPayload):
                     "name": file_info.get("name", "video.mp4")
                 }
             elif not s_data.get("ok") or s_data.get("status") == "error":
-                raise HTTPException(status_code=400, detail="Server could not process file!")
+                return None
         except Exception:
             pass
         await asyncio.sleep(2)
+    return None
 
-    raise HTTPException(status_code=408, detail="Timeout! Please try again.")
+@app.post("/api/fetch")
+async def fetch_video(payload: URLPayload):
+    link = payload.url.strip()
+    
+    # 1. Check if it is a Flezen link
+    if "flezen.com/s/" in link:
+        res = await resolve_flezen(link)
+        if res:
+            return res
+        raise HTTPException(status_code=400, detail="Flezen theke video link paoa jayni!")
+
+    # 2. Check if it is a Terabox link
+    terabox_domains = ["terabox.com", "1024tera.com", "teraboxapp.com", "terasharelink.com", "freeterabox.com"]
+    if any(domain in link for domain in terabox_domains):
+        res = await resolve_terabox(link)
+        if res:
+            return res
+        raise HTTPException(status_code=400, detail="Terabox server theke video link process kora jayni!")
+
+    raise HTTPException(status_code=400, detail="Unsupported URL! Sudhu Flezen ba Terabox link support kore.")
 
 @app.get("/", response_class=HTMLResponse)
 def home():
@@ -92,12 +134,13 @@ def home():
     <html lang="bn">
     <head>
         <meta charset="UTF-8">
-        <title>Flezen Downloader</title>
+        <title>Flezen & Terabox Downloader</title>
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <style>
             body { font-family: system-ui, sans-serif; background: #0b0f19; color: #f8fafc; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; padding: 20px; box-sizing: border-box; }
             .card { background: #1e293b; padding: 26px; border-radius: 16px; width: 100%; max-width: 520px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
             h2 { color: #38bdf8; text-align: center; margin-top: 0; }
+            p.sub { text-align: center; color: #94a3b8; font-size: 13px; margin-top: -8px; margin-bottom: 15px; }
             .input-group { display: flex; gap: 8px; margin: 15px 0 10px 0; }
             input { flex: 1; padding: 13px; border-radius: 8px; border: 1px solid #334155; background: #0f172a; color: #fff; outline: none; font-size: 14px; }
             .btn-paste { padding: 0 16px; background: #64748b; color: #fff; border: none; border-radius: 8px; font-weight: 600; cursor: pointer; }
@@ -114,9 +157,10 @@ def home():
     </head>
     <body>
         <div class="card">
-            <h2>Flezen Direct Player</h2>
+            <h2>Direct Video Player</h2>
+            <p class="sub">Flezen & Terabox Ad-Free Downloader</p>
             <div class="input-group">
-                <input type="text" id="linkInput" placeholder="Flezen link paste korun...">
+                <input type="text" id="linkInput" placeholder="Flezen ba Terabox link paste korun...">
                 <button type="button" class="btn-paste" id="pasteBtn" onclick="handlePasteAndRun()">Paste</button>
             </div>
             <button type="button" class="btn-run" id="btn" onclick="getVideo()">Video Anun</button>
@@ -182,7 +226,7 @@ def home():
                 btn.disabled = true;
                 pasteBtn.disabled = true;
                 msg.style.color = "#38bdf8";
-                msg.innerText = "Video process hocche... Opekkha korun.";
+                msg.innerText = "Processing video... Opekkha korun.";
 
                 try {
                     const res = await fetch("/api/fetch", {
@@ -200,7 +244,7 @@ def home():
                         cont.style.display = "block";
                     } else {
                         msg.style.color = "#f87171";
-                        msg.innerText = d.detail || "Error: Video paoa jayni!";
+                        msg.innerText = d.detail || "Video link paoa jayni!";
                     }
                 } catch(e) {
                     msg.style.color = "#f87171";
