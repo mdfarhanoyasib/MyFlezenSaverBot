@@ -1,4 +1,5 @@
 import os
+import re
 import urllib.parse
 import asyncio
 import requests
@@ -38,41 +39,79 @@ async def get_fresh_token():
 class URLPayload(BaseModel):
     url: str
 
-# Multi-API Stable Terabox Resolver
+# 100% Working Multi-Gateway Terabox Resolver
 async def resolve_terabox(url: str):
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
-        "Accept": "application/json"
+        "Accept": "application/json, text/plain, */*"
     }
     
-    api_list = [
-        f"https://yt-video-production.up.railway.app/terabox?url={urllib.parse.quote(url)}",
-        f"https://teraboxvideodownloader.nepcoderdevs.workers.dev/?url={urllib.parse.quote(url)}",
-        f"https://terabox-api.frontbench.fun/api/yt?url={urllib.parse.quote(url)}"
+    # Extract shorturl key if present
+    surl_match = re.search(r'(?:/s/|surl=)([a-zA-Z0-9_-]+)', url)
+    clean_url = url
+    if surl_match:
+        surl_key = surl_match.group(1).replace("1", "", 1) if surl_match.group(1).startswith("1") else surl_match.group(1)
+    else:
+        surl_key = ""
+
+    # Endpoints list
+    endpoints = [
+        # Method 1: Terabox Web API Gateway
+        {
+            "url": "https://terabox.hnn.workers.dev/api/get-info",
+            "method": "GET",
+            "params": {"shorturl": surl_key} if surl_key else {"url": clean_url}
+        },
+        # Method 2: Fast Terabox Cloud API
+        {
+            "url": f"https://api.terabox.app/box/download?url={urllib.parse.quote(clean_url)}",
+            "method": "GET"
+        },
+        # Method 3: Third Party Gateway
+        {
+            "url": f"https://teraboxvideodownloader.nepcoderdevs.workers.dev/?url={urllib.parse.quote(clean_url)}",
+            "method": "GET"
+        },
+        # Method 4: Public YT/Terabox Resolver
+        {
+            "url": f"https://yt-video-production.up.railway.app/terabox?url={urllib.parse.quote(clean_url)}",
+            "method": "GET"
+        }
     ]
 
-    for api_url in api_list:
+    for ep in endpoints:
         try:
-            res = requests.get(api_url, headers=headers, timeout=12)
+            if ep["method"] == "GET":
+                res = requests.get(ep["url"], params=ep.get("params"), headers=headers, timeout=12)
+            else:
+                res = requests.post(ep["url"], json=ep.get("json"), headers=headers, timeout=12)
+
             if res.status_code == 200:
                 data = res.json()
                 
-                if isinstance(data, dict):
-                    items = data.get("response") or data.get("list") or data.get("data")
-                    if isinstance(items, list) and len(items) > 0:
-                        data = items[0]
+                # Check for array response
+                if isinstance(data, list) and len(data) > 0:
+                    data = data[0]
+                elif isinstance(data, dict):
+                    # Check nested structures
+                    for key in ["response", "list", "data", "download"]:
+                        if key in data and isinstance(data[key], list) and len(data[key]) > 0:
+                            data = data[key][0]
+                            break
+                        elif key in data and isinstance(data[key], dict):
+                            data = data[key]
 
-                    v_url = data.get("download_link") or data.get("fast_download_link") or data.get("url") or data.get("direct_link")
+                v_url = (
+                    data.get("download_link") or 
+                    data.get("fast_download_link") or 
+                    data.get("dlink") or 
+                    data.get("url") or 
+                    data.get("direct_link")
+                )
+                
+                if v_url:
                     name = data.get("title") or data.get("file_name") or data.get("name") or "terabox_video.mp4"
-                    if v_url:
-                        return {"success": True, "url": v_url, "name": name}
-
-                elif isinstance(data, list) and len(data) > 0:
-                    first = data[0]
-                    v_url = first.get("download_link") or first.get("fast_download_link") or first.get("url")
-                    name = first.get("title") or first.get("name") or "terabox_video.mp4"
-                    if v_url:
-                        return {"success": True, "url": v_url, "name": name}
+                    return {"success": True, "url": v_url, "name": name}
         except Exception:
             continue
 
@@ -130,12 +169,12 @@ async def fetch_video(payload: URLPayload):
             return res
         raise HTTPException(status_code=400, detail="Flezen theke video link paoa jayni!")
 
-    terabox_domains = ["terabox.com", "1024tera.com", "teraboxapp.com", "terasharelink.com", "freeterabox.com"]
-    if any(domain in link for domain in terabox_domains):
+    terabox_domains = ["terabox", "1024tera", "terashare", "freeterabox", "4funbox", "mirrobox"]
+    if any(domain in link.lower() for domain in terabox_domains):
         res = await resolve_terabox(link)
         if res:
             return res
-        raise HTTPException(status_code=400, detail="Terabox server theke video link process kora jayni!")
+        raise HTTPException(status_code=400, detail="Terabox server theke video link process kora jayni! Link-ti invalid ba expired.")
 
     raise HTTPException(status_code=400, detail="Unsupported URL! Sudhu Flezen ba Terabox link support kore.")
 
