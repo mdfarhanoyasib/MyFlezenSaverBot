@@ -13,13 +13,15 @@ import uvicorn
 API_ID = 39935562
 API_HASH = "0dce340be473504b335286e7cb8ce93f"
 
-# Render-এর Environment Variable থেকে SESSION_STRING নিবে
+# Render Environment Variable theke SESSION_STRING nebe
 SESSION_STRING = os.getenv("SESSION_STRING", "")
 
 FLEZEN_BOT = "flezennbot"
 WEBAPP_URL = "https://flezen-downloader.pages.dev/"
-DOWNLOAD_ENDPOINT = "https://api2.diskwala.net/api/flezen/download"
-STATUS_ENDPOINT = "https://api2.diskwala.net/api/flezen/status"
+
+# Notun Updated Endpoints (downloadw ebong statusw)
+DOWNLOAD_ENDPOINT = "https://api2.diskwala.net/api/flezen/downloadw"
+STATUS_ENDPOINT = "https://api2.diskwala.net/api/flezen/statusw"
 
 app = FastAPI()
 user_client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
@@ -43,12 +45,12 @@ class URLPayload(BaseModel):
 async def fetch_video(payload: URLPayload):
     link = payload.url.strip()
     if not link.startswith("https://flezen.com/s/"):
-        raise HTTPException(status_code=400, detail="ভুল Flezen লিঙ্ক! লিঙ্কটি https://flezen.com/s/ দিয়ে শুরু হতে হবে।")
+        raise HTTPException(status_code=400, detail="Invalid Flezen link! Link-ti https://flezen.com/s/ diye shuru hote hobe.")
 
     try:
         token = await get_fresh_token()
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"টেলিগ্রাম সেশন/টোকেন এরর: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Telegram Session ba Token error: {str(e)}")
 
     headers = {
         "Accept": "*/*",
@@ -56,15 +58,17 @@ async def fetch_video(payload: URLPayload):
         "Content-Type": "application/json",
         "Origin": "https://flezen-downloader.pages.dev",
         "Referer": "https://flezen-downloader.pages.dev/",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
         "X-Bot-Id": "flezen"
     }
 
+    # Notun downloadw endpoint-e trigger pathano
     try:
         requests.post(DOWNLOAD_ENDPOINT, json={"link": link}, headers=headers, timeout=15)
     except Exception:
         pass
 
+    # Notun statusw endpoint theke polling kore video link anah
     loop = asyncio.get_event_loop()
     start_time = loop.time()
     while loop.time() - start_time < 45:
@@ -79,12 +83,12 @@ async def fetch_video(payload: URLPayload):
                     "name": file_info.get("name", "video.mp4")
                 }
             elif not s_data.get("ok") or s_data.get("status") == "error":
-                raise HTTPException(status_code=400, detail="সার্ভার থেকে ভিডিও ফাইল প্রসেস করা যায়নি!")
+                raise HTTPException(status_code=400, detail="Server theke video process kora jayni!")
         except Exception:
             pass
         await asyncio.sleep(2)
 
-    raise HTTPException(status_code=408, detail="টাইমআউট! সার্ভার সাড়া দিচ্ছে না, আবার চেষ্টা করুন।")
+    raise HTTPException(status_code=408, detail="Timeout! Server response korche na, abar try korun.")
 
 @app.get("/", response_class=HTMLResponse)
 def home():
@@ -117,7 +121,7 @@ def home():
         <div class="card">
             <h2>Flezen Direct Player</h2>
             <div class="input-group">
-                <input type="text" id="linkInput" placeholder="Flezen লিঙ্ক পেস্ট করুন...">
+                <input type="text" id="linkInput" placeholder="Flezen link paste korun...">
                 <button type="button" class="btn-paste" id="pasteBtn" onclick="handlePasteAndRun()">Paste</button>
             </div>
             <button type="button" class="btn-run" id="btn" onclick="getVideo()">Video Anun</button>
@@ -155,10 +159,10 @@ def home():
                         input.value = text.trim();
                         getVideo();
                     } else {
-                        alert("Clipboard খালি!");
+                        alert("Clipboard khali!");
                     }
                 } catch(err) {
-                    alert("Clipboard এক্সেসের অনুমতি দিন!");
+                    alert("Clipboard access permission din!");
                 }
             }
 
@@ -174,7 +178,7 @@ def home():
                 const url = input.value.trim();
                 if(!url) {
                     stopPreviousVideo();
-                    msg.innerText = "দয়া করে Flezen লিঙ্ক পেস্ট করুন!";
+                    msg.innerText = "Doya kore Flezen link paste korun!";
                     return;
                 }
 
@@ -183,7 +187,7 @@ def home():
                 btn.disabled = true;
                 pasteBtn.disabled = true;
                 msg.style.color = "#38bdf8";
-                msg.innerText = "ভিডিও সংগ্রহ করা হচ্ছে... অপেক্ষা করুন।";
+                msg.innerText = "Video shongroho kora hocche... Opekkha korun.";
 
                 try {
                     const res = await fetch("/api/fetch", {
@@ -196,16 +200,17 @@ def home():
                         msg.innerText = "";
                         player.src = d.url;
                         player.load();
+                        player.play().catch(()=>{});
                         dl.href = d.url;
                         dl.setAttribute("download", d.name || "video.mp4");
                         cont.style.display = "block";
                     } else {
                         msg.style.color = "#f87171";
-                        msg.innerText = d.detail || "ভিডিও পাওয়া যায়নি!";
+                        msg.innerText = d.detail || "Video paoa jayni!";
                     }
                 } catch(e) {
                     msg.style.color = "#f87171";
-                    msg.innerText = "কানেকশন এরর হয়েছে!";
+                    msg.innerText = "Connection error hoyeche!";
                 } finally {
                     btn.disabled = false;
                     pasteBtn.disabled = false;
